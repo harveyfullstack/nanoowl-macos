@@ -16,6 +16,7 @@
 
 import argparse
 import PIL.Image
+import os
 from nanoowl.owl_predictor import OwlPredictor
 from nanoowl.tree_predictor import (
     TreePredictor, Tree
@@ -35,6 +36,10 @@ if __name__ == "__main__":
     parser.add_argument("--model", type=str, default="google/owlvit-base-patch32")
     parser.add_argument("--image_encoder_engine", type=str, default="../data/owl_image_encoder_patch32.engine")
     args = parser.parse_args()
+    
+    output_dir = os.path.dirname(args.output)
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
     predictor = TreePredictor(
         owl_predictor=OwlPredictor(

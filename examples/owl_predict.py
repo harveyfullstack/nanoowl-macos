@@ -18,6 +18,7 @@ import argparse
 import PIL.Image
 import time
 import torch
+import os
 from nanoowl.owl_predictor import (
     OwlPredictor
 )
@@ -38,6 +39,10 @@ if __name__ == "__main__":
     parser.add_argument("--profile", action="store_true")
     parser.add_argument("--num_profiling_runs", type=int, default=30)
     args = parser.parse_args()
+
+    output_dir = os.path.dirname(args.output)
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
     prompt = args.prompt.strip("][()")
     text = prompt.split(',')
