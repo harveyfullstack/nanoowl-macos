@@ -25,11 +25,11 @@ from typing import List
 
 
 def get_colors(count: int):
-    cmap = plt.cm.get_cmap("rainbow", count)
+    cmap = plt.get_cmap("rainbow", count)
     colors = []
     for i in range(count):
         color = cmap(i)
-        color = [int(255 * value) for value in color]
+        color = [int(255 * value) for value in color[:3]]
         colors.append(tuple(color))
     return colors
 
@@ -39,6 +39,7 @@ def draw_tree_output(image, output: TreeOutput, tree: Tree, draw_text=True, num_
     is_pil = not isinstance(image, np.ndarray)
     if is_pil:
         image = np.asarray(image)
+    image = np.copy(image)
     font = cv2.FONT_HERSHEY_SIMPLEX
     font_scale = 0.75
     colors = get_colors(num_colors)

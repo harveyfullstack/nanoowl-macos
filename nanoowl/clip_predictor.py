@@ -57,7 +57,7 @@ class ClipPredictor(torch.nn.Module):
     def __init__(self,
             model_name: str = "ViT-B/32",
             image_size: Tuple[int, int] = (224, 224),
-            device: str = "cuda",
+            device: str = "mps",
             image_preprocessor: Optional[ImagePreprocessor] = None
         ):
         super().__init__()

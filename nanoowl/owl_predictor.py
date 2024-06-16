@@ -144,7 +144,7 @@ class OwlPredictor(torch.nn.Module):
     
     def __init__(self,
             model_name: str = "google/owlvit-base-patch32",
-            device: str = "cuda",
+            device: str = "mps",
             image_encoder_engine: Optional[str] = None,
             image_encoder_engine_max_batch_size: int = 1,
             image_preprocessor: Optional[ImagePreprocessor] = None
@@ -167,9 +167,6 @@ class OwlPredictor(torch.nn.Module):
             )
         ).to(self.device).float()
         self.image_encoder_engine = None
-        if image_encoder_engine is not None:
-            image_encoder_engine = OwlPredictor.load_image_encoder_engine(image_encoder_engine, image_encoder_engine_max_batch_size)
-        self.image_encoder_engine = image_encoder_engine
         self.image_preprocessor = image_preprocessor.to(self.device).eval() if image_preprocessor else ImagePreprocessor().to(self.device).eval()
 
     def get_num_patches(self):
@@ -221,14 +218,9 @@ class OwlPredictor(torch.nn.Module):
 
         return output
     
-    def encode_image_trt(self, image: torch.Tensor) -> OwlEncodeImageOutput:
-        return self.image_encoder_engine(image)
 
     def encode_image(self, image: torch.Tensor) -> OwlEncodeImageOutput:
-        if self.image_encoder_engine is not None:
-            return self.encode_image_trt(image)
-        else:
-            return self.encode_image_torch(image)
+        return self.encode_image_torch(image)
 
     def extract_rois(self, image: torch.Tensor, rois: torch.Tensor, pad_square: bool = True, padding_scale: float = 1.0):
         if len(rois) == 0:
@@ -313,146 +305,6 @@ class OwlPredictor(torch.nn.Module):
             boxes=image_output.pred_boxes[mask],
             input_indices=input_indices[mask]
         )
-
-    @staticmethod
-    def get_image_encoder_input_names():
-        return ["image"]
-
-    @staticmethod
-    def get_image_encoder_output_names():
-        names = [
-            "image_embeds",
-            "image_class_embeds",
-            "logit_shift",
-            "logit_scale",
-            "pred_boxes"
-        ]
-        return names
-
-
-    def export_image_encoder_onnx(self, 
-            output_path: str,
-            use_dynamic_axes: bool = True,
-            batch_size: int = 1,
-            onnx_opset=17
-        ):
-        
-        class TempModule(torch.nn.Module):
-            def __init__(self, parent):
-                super().__init__()
-                self.parent = parent
-            def forward(self, image):
-                output = self.parent.encode_image_torch(image)
-                return (
-                    output.image_embeds,
-                    output.image_class_embeds,
-                    output.logit_shift,
-                    output.logit_scale,
-                    output.pred_boxes
-                )
-
-        data = torch.randn(batch_size, 3, self.image_size, self.image_size).to(self.device)
-
-        if use_dynamic_axes:
-            dynamic_axes =  {
-                "image": {0: "batch"},
-                "image_embeds": {0: "batch"},
-                "image_class_embeds": {0: "batch"},
-                "logit_shift": {0: "batch"},
-                "logit_scale": {0: "batch"},
-                "pred_boxes": {0: "batch"}       
-            }
-        else:
-            dynamic_axes = {}
-
-        model = TempModule(self)
-
-        torch.onnx.export(
-            model, 
-            data, 
-            output_path, 
-            input_names=self.get_image_encoder_input_names(), 
-            output_names=self.get_image_encoder_output_names(),
-            dynamic_axes=dynamic_axes,
-            opset_version=onnx_opset
-        )
-    
-    @staticmethod
-    def load_image_encoder_engine(engine_path: str, max_batch_size: int = 1):
-        import tensorrt as trt
-        from torch2trt import TRTModule
-
-        with trt.Logger() as logger, trt.Runtime(logger) as runtime:
-            with open(engine_path, 'rb') as f:
-                engine_bytes = f.read()
-            engine = runtime.deserialize_cuda_engine(engine_bytes)
-
-        base_module = TRTModule(
-            engine,
-            input_names=OwlPredictor.get_image_encoder_input_names(),
-            output_names=OwlPredictor.get_image_encoder_output_names()
-        )
-
-        class Wrapper(torch.nn.Module):
-            def __init__(self, base_module: TRTModule, max_batch_size: int):
-                super().__init__()
-                self.base_module = base_module
-                self.max_batch_size = max_batch_size
-
-            @torch.no_grad()
-            def forward(self, image):
-
-                b = image.shape[0]
-
-                results = []
-
-                for start_index in range(0, b, self.max_batch_size):
-                    end_index = min(b, start_index + self.max_batch_size)
-                    image_slice = image[start_index:end_index]
-                    # with torch_timeit_sync("run_engine"):
-                    output = self.base_module(image_slice)
-                    results.append(
-                        output
-                    )
-
-                return OwlEncodeImageOutput(
-                    image_embeds=torch.cat([r[0] for r in results], dim=0),
-                    image_class_embeds=torch.cat([r[1] for r in results], dim=0),
-                    logit_shift=torch.cat([r[2] for r in results], dim=0),
-                    logit_scale=torch.cat([r[3] for r in results], dim=0),
-                    pred_boxes=torch.cat([r[4] for r in results], dim=0)
-                )
-
-        image_encoder = Wrapper(base_module, max_batch_size)
-
-        return image_encoder
-
-    def build_image_encoder_engine(self, 
-            engine_path: str, 
-            max_batch_size: int = 1, 
-            fp16_mode = True, 
-            onnx_path: Optional[str] = None,
-            onnx_opset: int = 17
-        ):
-
-        if onnx_path is None:
-            onnx_dir = tempfile.mkdtemp()
-            onnx_path = os.path.join(onnx_dir, "image_encoder.onnx")
-            self.export_image_encoder_onnx(onnx_path, onnx_opset=onnx_opset)
-
-        args = ["/usr/src/tensorrt/bin/trtexec"]
-    
-        args.append(f"--onnx={onnx_path}")
-        args.append(f"--saveEngine={engine_path}")
-
-        if fp16_mode:
-            args += ["--fp16"]
-
-        args += [f"--shapes=image:1x3x{self.image_size}x{self.image_size}"]
-
-        subprocess.call(args)
-
-        return self.load_image_encoder_engine(engine_path, max_batch_size)
 
     def predict(self, 
             image: PIL.Image, 

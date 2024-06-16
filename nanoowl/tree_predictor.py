@@ -45,7 +45,7 @@ class TreePredictor(torch.nn.Module):
             owl_predictor: Optional[OwlPredictor] = None,
             clip_predictor: Optional[ClipPredictor] = None,
             image_preprocessor: Optional[ImagePreprocessor] = None,
-            device: str = "cuda"
+            device: str = "mps"
         ):
         super().__init__()
         self.owl_predictor = OwlPredictor() if owl_predictor is None else owl_predictor
